@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">MIUI 10 OS</string>
+    <string name="os_version_label">MIUI Global 10.2</string>
+    <string name="setup_title">Новый рабочий стол</string>
+    <string name="setup_subtitle">Разрешите доступ при первом запуске для инициализации системы и оптимизации производительности</string>
+    <string name="grant_access_cta">Разрешить доступ и запустить</string>
+    <string name="set_default_home_cta">Сделать рабочим столом по умолчанию</string>
+    <string name="search_apps_hint">Поиск приложений и настроек</string>
+    <string name="settings_title">Настройки</string>
+    <string name="settings_search_hint">Поиск настроек</string>
+</resources>

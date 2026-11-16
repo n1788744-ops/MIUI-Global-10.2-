@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer soft desktop frame inside 66dp safe zone (coords 21..87) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,26 L74,26 C78.4,26 82,29.6 82,34 L82,74 C82,78.4 78.4,82 74,82 L34,82 C29.6,82 26,78.4 26,74 L26,34 C26,29.6 29.6,26 34,26 Z" />
+    <!-- Top-left tile -->
+    <path
+        android:fillColor="#0D47A1"
+        android:pathData="M34,33 L50,33 C51.1,33 52,33.9 52,35 L52,50 C52,51.1 51.1,52 50,52 L34,52 C32.9,52 32,51.1 32,50 L32,35 C32,33.9 32.9,33 34,33 Z" />
+    <!-- Top-right tile -->
+    <path
+        android:fillColor="#00897B"
+        android:pathData="M58,33 L74,33 C75.1,33 76,33.9 76,35 L76,50 C76,51.1 75.1,52 74,52 L58,52 C56.9,52 56,51.1 56,50 L56,35 C56,33.9 56.9,33 58,33 Z" />
+    <!-- Bottom-left tile -->
+    <path
+        android:fillColor="#1A8CFF"
+        android:pathData="M34,56 L50,56 C51.1,56 52,56.9 52,58 L52,73 C52,74.1 51.1,75 50,75 L34,75 C32.9,75 32,74.1 32,73 L32,58 C32,56.9 32.9,56 34,56 Z" />
+    <!-- Bottom-right speed bolt tile -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M58,56 L74,56 C75.1,56 76,56.9 76,58 L76,73 C76,74.1 75.1,75 74,75 L58,75 C56.9,75 56,74.1 56,73 L56,58 C56,56.9 56.9,56 58,56 Z" />
+</vector>

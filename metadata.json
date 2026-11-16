@@ -1,0 +1,6 @@
+{
+  "name": "MIUI 10 OS",
+  "description": "Оболочка и рабочий стол MIUI Global 10.2 с выделением 256 МБ ОЗУ, фоновой оптимизацией памяти и поддержкой ЦП от 1.5 ГГц",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
