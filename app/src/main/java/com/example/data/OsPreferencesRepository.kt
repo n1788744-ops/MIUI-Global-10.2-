@@ -6,7 +6,9 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -27,6 +29,21 @@ data class OsPreferences(
     val bgOptimizationEnabled: Boolean = true,
     val cpu15GhzBoostEnabled: Boolean = true,
     val customWallpaperUri: String? = null,
+    // Battery 80% / 70% anti-drain & calm mode
+    val batteryCalmAutoEnabled: Boolean = true,
+    val batteryCalmThreshold: Int = 80, // 80 or 70
+    val batteryCalmManualOverride: Boolean = false,
+    // Separate 8 GB virtual RAM expansion
+    val virtualRam8GbEnabled: Boolean = true,
+    // Call screening & unknown caller prompt
+    val callFilterEnabled: Boolean = true,
+    val allowedCallNumbers: Set<String> = emptySet(),
+    val blockedCallNumbers: Set<String> = emptySet(),
+    val callHistoryJson: String = "[]",
+    // Virtual environment: second accounts, virtual MACs & isolated APK/app entries
+    val virtualAccountsJson: String = "",
+    val activeVirtualAccountId: String = "",
+    val virtualAppsJson: String = "[]",
 )
 
 class OsPreferencesRepository(private val context: Context) {
@@ -45,6 +62,20 @@ class OsPreferencesRepository(private val context: Context) {
         val BG_OPT_ENABLED = booleanPreferencesKey("bg_opt_enabled")
         val CPU_15GHZ_BOOST = booleanPreferencesKey("cpu_15ghz_boost")
         val CUSTOM_WALLPAPER_URI = stringPreferencesKey("custom_wallpaper_uri")
+
+        val BATTERY_CALM_AUTO = booleanPreferencesKey("battery_calm_auto")
+        val BATTERY_CALM_THRESHOLD = intPreferencesKey("battery_calm_threshold")
+        val BATTERY_CALM_MANUAL = booleanPreferencesKey("battery_calm_manual")
+        val VIRTUAL_RAM_8GB = booleanPreferencesKey("virtual_ram_8gb")
+
+        val CALL_FILTER_ENABLED = booleanPreferencesKey("call_filter_enabled")
+        val ALLOWED_NUMBERS = stringSetPreferencesKey("allowed_call_numbers")
+        val BLOCKED_NUMBERS = stringSetPreferencesKey("blocked_call_numbers")
+        val CALL_HISTORY_JSON = stringPreferencesKey("call_history_json")
+
+        val VIRTUAL_ACCOUNTS_JSON = stringPreferencesKey("virtual_accounts_json")
+        val ACTIVE_VIRTUAL_ACCOUNT_ID = stringPreferencesKey("active_virtual_account_id")
+        val VIRTUAL_APPS_JSON = stringPreferencesKey("virtual_apps_json")
     }
 
     val preferencesFlow: Flow<OsPreferences> = context.osDataStore.data.map { prefs ->
@@ -62,6 +93,17 @@ class OsPreferencesRepository(private val context: Context) {
             bgOptimizationEnabled = prefs[Keys.BG_OPT_ENABLED] ?: true,
             cpu15GhzBoostEnabled = prefs[Keys.CPU_15GHZ_BOOST] ?: true,
             customWallpaperUri = prefs[Keys.CUSTOM_WALLPAPER_URI],
+            batteryCalmAutoEnabled = prefs[Keys.BATTERY_CALM_AUTO] ?: true,
+            batteryCalmThreshold = prefs[Keys.BATTERY_CALM_THRESHOLD] ?: 80,
+            batteryCalmManualOverride = prefs[Keys.BATTERY_CALM_MANUAL] ?: false,
+            virtualRam8GbEnabled = prefs[Keys.VIRTUAL_RAM_8GB] ?: true,
+            callFilterEnabled = prefs[Keys.CALL_FILTER_ENABLED] ?: true,
+            allowedCallNumbers = prefs[Keys.ALLOWED_NUMBERS] ?: emptySet(),
+            blockedCallNumbers = prefs[Keys.BLOCKED_NUMBERS] ?: emptySet(),
+            callHistoryJson = prefs[Keys.CALL_HISTORY_JSON] ?: "[]",
+            virtualAccountsJson = prefs[Keys.VIRTUAL_ACCOUNTS_JSON] ?: "",
+            activeVirtualAccountId = prefs[Keys.ACTIVE_VIRTUAL_ACCOUNT_ID] ?: "",
+            virtualAppsJson = prefs[Keys.VIRTUAL_APPS_JSON] ?: "[]",
         )
     }
 
@@ -118,5 +160,74 @@ class OsPreferencesRepository(private val context: Context) {
             if (uri == null) it.remove(Keys.CUSTOM_WALLPAPER_URI)
             else it[Keys.CUSTOM_WALLPAPER_URI] = uri
         }
+    }
+
+    suspend fun toggleBatteryCalmAuto() {
+        context.osDataStore.edit { it[Keys.BATTERY_CALM_AUTO] = !(it[Keys.BATTERY_CALM_AUTO] ?: true) }
+    }
+
+    suspend fun setBatteryCalmThreshold(percent: Int) {
+        val normalized = if (percent == 70) 70 else 80
+        context.osDataStore.edit { it[Keys.BATTERY_CALM_THRESHOLD] = normalized }
+    }
+
+    suspend fun toggleBatteryCalmManual() {
+        context.osDataStore.edit { it[Keys.BATTERY_CALM_MANUAL] = !(it[Keys.BATTERY_CALM_MANUAL] ?: false) }
+    }
+
+    suspend fun toggleVirtualRam8Gb() {
+        context.osDataStore.edit { it[Keys.VIRTUAL_RAM_8GB] = !(it[Keys.VIRTUAL_RAM_8GB] ?: true) }
+    }
+
+    suspend fun toggleCallFilter() {
+        context.osDataStore.edit { it[Keys.CALL_FILTER_ENABLED] = !(it[Keys.CALL_FILTER_ENABLED] ?: true) }
+    }
+
+    suspend fun allowCallNumber(normalizedNumber: String) {
+        context.osDataStore.edit { prefs ->
+            val allowed = (prefs[Keys.ALLOWED_NUMBERS] ?: emptySet()).toMutableSet()
+            val blocked = (prefs[Keys.BLOCKED_NUMBERS] ?: emptySet()).toMutableSet()
+            allowed.add(normalizedNumber)
+            blocked.remove(normalizedNumber)
+            prefs[Keys.ALLOWED_NUMBERS] = allowed
+            prefs[Keys.BLOCKED_NUMBERS] = blocked
+        }
+    }
+
+    suspend fun blockCallNumber(normalizedNumber: String) {
+        context.osDataStore.edit { prefs ->
+            val allowed = (prefs[Keys.ALLOWED_NUMBERS] ?: emptySet()).toMutableSet()
+            val blocked = (prefs[Keys.BLOCKED_NUMBERS] ?: emptySet()).toMutableSet()
+            blocked.add(normalizedNumber)
+            allowed.remove(normalizedNumber)
+            prefs[Keys.ALLOWED_NUMBERS] = allowed
+            prefs[Keys.BLOCKED_NUMBERS] = blocked
+        }
+    }
+
+    suspend fun removeCallRule(normalizedNumber: String) {
+        context.osDataStore.edit { prefs ->
+            val allowed = (prefs[Keys.ALLOWED_NUMBERS] ?: emptySet()).toMutableSet()
+            val blocked = (prefs[Keys.BLOCKED_NUMBERS] ?: emptySet()).toMutableSet()
+            allowed.remove(normalizedNumber)
+            blocked.remove(normalizedNumber)
+            prefs[Keys.ALLOWED_NUMBERS] = allowed
+            prefs[Keys.BLOCKED_NUMBERS] = blocked
+        }
+    }
+
+    suspend fun setCallHistoryJson(json: String) {
+        context.osDataStore.edit { it[Keys.CALL_HISTORY_JSON] = json }
+    }
+
+    suspend fun saveVirtualAccounts(accountsJson: String, activeId: String) {
+        context.osDataStore.edit {
+            it[Keys.VIRTUAL_ACCOUNTS_JSON] = accountsJson
+            it[Keys.ACTIVE_VIRTUAL_ACCOUNT_ID] = activeId
+        }
+    }
+
+    suspend fun saveVirtualAppsJson(json: String) {
+        context.osDataStore.edit { it[Keys.VIRTUAL_APPS_JSON] = json }
     }
 }

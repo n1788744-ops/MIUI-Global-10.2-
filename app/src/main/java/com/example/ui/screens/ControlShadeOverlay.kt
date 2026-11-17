@@ -23,7 +23,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AirplanemodeActive
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.BrightnessLow
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.PhoneCallback
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
@@ -92,6 +95,8 @@ fun ControlShadeOverlay(
     onToggleAutoRotate: () -> Unit,
     onToggleReadingMode: () -> Unit,
     onToggleRam256: () -> Unit,
+    onToggleVirtualRam8Gb: () -> Unit,
+    onToggleBatteryCalmManual: () -> Unit,
     onToggleCpuBoost: () -> Unit,
     onToggleBgOpt: () -> Unit,
     onRunManualOptimization: () -> Unit,
@@ -152,7 +157,7 @@ fun ControlShadeOverlay(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "ОЗУ ${state.telemetry.osTargetRamMb} МБ · ЦП ${String.format("%.2f", state.telemetry.cpuCurrentGhz)} ГГц · ${state.telemetry.currentFps} FPS",
+                        text = "ОЗУ 8 ГБ + ${state.telemetry.osTargetRamMb} МБ · ЦП ${String.format("%.2f", state.telemetry.cpuCurrentGhz)} ГГц · ${state.telemetry.currentFps} FPS",
                         color = Color.White.copy(alpha = 0.80f),
                         fontFamily = JetBrainsMonoFontFamily,
                         fontSize = 10.5.sp,
@@ -285,8 +290,38 @@ fun ControlShadeOverlay(
                                 }
                             }
                         } else {
-                            // Page 2: System RAM 256 MB & CPU >= 1.5 GHz quick controls
+                            // Page 2: System 8 GB RAM, 256 MB OS, 80/70% Calm Mode, Virtual Space, Call Filter
                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    ShadeToggleTile(
+                                        label = "ОЗУ +8 ГБ",
+                                        icon = Icons.Filled.Memory,
+                                        active = state.preferences.virtualRam8GbEnabled,
+                                        onClick = onToggleVirtualRam8Gb,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    ShadeToggleTile(
+                                        label = "Покой ${state.preferences.batteryCalmThreshold}%",
+                                        icon = Icons.Filled.BatterySaver,
+                                        active = state.isBatteryCalmActive,
+                                        onClick = onToggleBatteryCalmManual,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    ShadeToggleTile(
+                                        label = "Вирт. среда",
+                                        icon = Icons.Filled.Android,
+                                        active = true,
+                                        onClick = { onNavigate(OsRoute.VirtualSpace) },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    ShadeToggleTile(
+                                        label = "Звонки",
+                                        icon = Icons.Filled.PhoneCallback,
+                                        active = state.preferences.callFilterEnabled,
+                                        onClick = { onNavigate(OsRoute.CallScreening) },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
                                 Row(modifier = Modifier.fillMaxWidth()) {
                                     ShadeToggleTile(
                                         label = "ОЗУ 256 МБ",
@@ -317,7 +352,7 @@ fun ControlShadeOverlay(
                                         modifier = Modifier.weight(1f),
                                     )
                                 }
-                                Spacer(modifier = Modifier.height(148.dp))
+                                Spacer(modifier = Modifier.height(66.dp))
                             }
                         }
                     }

@@ -30,7 +30,9 @@ import com.example.ui.OsViewModel
 import com.example.ui.components.MiuiWallpaperBackground
 import com.example.ui.components.SystemDisplayOverlay
 import com.example.ui.screens.AboutPhoneScreen
+import com.example.ui.screens.BatteryCalmModeScreen
 import com.example.ui.screens.CalculatorScreen
+import com.example.ui.screens.CallScreeningScreen
 import com.example.ui.screens.CompassScreen
 import com.example.ui.screens.ControlShadeOverlay
 import com.example.ui.screens.DisplaySettingsScreen
@@ -41,6 +43,7 @@ import com.example.ui.screens.PerformanceSettingsScreen
 import com.example.ui.screens.SecurityCenterScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.SetupOnboardingScreen
+import com.example.ui.screens.VirtualSpaceScreen
 import com.example.ui.theme.MiuiOsTheme
 
 class MainActivity : ComponentActivity() {
@@ -59,6 +62,12 @@ class MainActivity : ComponentActivity() {
                     contract = ActivityResultContracts.StartActivityForResult(),
                 ) {
                     viewModel.refreshDefaultHomeStatus()
+                }
+
+                val callRoleLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.StartActivityForResult(),
+                ) {
+                    viewModel.refreshSystemRolesAndPermissions()
                 }
 
                 // Live UI smoothness / FPS measurement
@@ -83,11 +92,19 @@ class MainActivity : ComponentActivity() {
                     onDispose { choreographer.removeFrameCallback(callback) }
                 }
 
-                // Apply brightness to current window when adjusted
-                LaunchedEffect(uiState.preferences.brightnessLevel, uiState.preferences.autoBrightness) {
+                // Apply brightness (and subtle power-saving dim when 80%/70% Battery Calm Mode is active)
+                LaunchedEffect(
+                    uiState.preferences.brightnessLevel,
+                    uiState.preferences.autoBrightness,
+                    uiState.isBatteryCalmActive,
+                ) {
                     val act = context as? Activity ?: return@LaunchedEffect
                     val lp = act.window.attributes
-                    lp.screenBrightness = if (uiState.preferences.autoBrightness) -1f else uiState.preferences.brightnessLevel
+                    lp.screenBrightness = when {
+                        uiState.isBatteryCalmActive -> (uiState.preferences.brightnessLevel * 0.72f).coerceIn(0.20f, 0.70f)
+                        uiState.preferences.autoBrightness -> -1f
+                        else -> uiState.preferences.brightnessLevel
+                    }
                     act.window.attributes = lp
                 }
 
@@ -109,6 +126,15 @@ class MainActivity : ComponentActivity() {
                             viewModel.openHomeSettings()
                         }
                     },
+                    onRequestCallScreeningRole = {
+                        val intent = viewModel.createCallScreeningRoleIntent()
+                        if (intent != null) {
+                            runCatching { callRoleLauncher.launch(intent) }
+                                .onFailure { viewModel.showMessage("Роль фильтрации звонков недоступна на этом устройстве") }
+                        } else {
+                            viewModel.showMessage("Роль фильтрации звонков уже активна или недоступна")
+                        }
+                    },
                 )
             }
         }
@@ -125,6 +151,7 @@ private fun MiuiOsRoot(
     state: OsUiState,
     viewModel: OsViewModel,
     onRequestDefaultHome: () -> Unit,
+    onRequestCallScreeningRole: () -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         if (!state.isPreferencesLoaded) {
@@ -139,7 +166,6 @@ private fun MiuiOsRoot(
                 onGrantAccessAndLaunch = { viewModel.completeFirstLaunchSetup() },
             )
         } else {
-            // Persistent MIUI 10 Wallpaper behind desktop
             MiuiWallpaperBackground(customWallpaperUri = state.preferences.customWallpaperUri)
 
             HomeDesktopScreen(
@@ -157,10 +183,10 @@ private fun MiuiOsRoot(
                 onLaunchCamera = { viewModel.launchCamera() },
                 onToggleFlashlight = { viewModel.toggleFlashlight() },
                 onPickWallpaper = { uri -> viewModel.setCustomWallpaperUri(uri?.toString()) },
+                onResolveUnknownCall = { num, allow -> viewModel.resolveUnknownCall(num, allow) },
                 onShowToast = { viewModel.showMessage(it) },
             )
 
-            // Active sub-screens (Settings, About Phone, Security Center, Display, Performance, Tools)
             AnimatedVisibility(
                 visible = state.currentRoute != OsRoute.Home,
                 enter = fadeIn(),
@@ -198,6 +224,7 @@ private fun MiuiOsRoot(
                         state = state,
                         onBack = { viewModel.navigateBack() },
                         onToggleRam256 = { viewModel.toggleRam256Profile() },
+                        onToggleVirtualRam8Gb = { viewModel.toggleVirtualRam8Gb() },
                         onToggleBgOpt = { viewModel.toggleBgOptimization() },
                         onToggleCpuBoost = { viewModel.toggleCpuBoost() },
                         onRunOptimization = { viewModel.runManualOptimization() },
@@ -214,10 +241,39 @@ private fun MiuiOsRoot(
                     OsRoute.Compass -> CompassScreen(
                         onBack = { viewModel.navigateBack() },
                     )
+                    OsRoute.BatteryCalmMode -> BatteryCalmModeScreen(
+                        state = state,
+                        onBack = { viewModel.navigateBack() },
+                        onToggleAuto = { viewModel.toggleBatteryCalmAuto() },
+                        onSelectThreshold = { viewModel.setBatteryCalmThreshold(it) },
+                        onToggleManual = { viewModel.toggleBatteryCalmManual() },
+                    )
+                    OsRoute.VirtualSpace -> VirtualSpaceScreen(
+                        state = state,
+                        onBack = { viewModel.navigateBack() },
+                        onCreateAccount = { name, handle -> viewModel.createVirtualAccount(name, handle) },
+                        onSelectAccount = { viewModel.selectVirtualAccount(it) },
+                        onRegenerateMac = { viewModel.regenerateActiveVirtualMac(it) },
+                        onImportApk = { viewModel.importApkToVirtualSpace(it) },
+                        onCloneApp = { viewModel.cloneInstalledAppToVirtualSpace(it) },
+                        onLaunchVirtualApp = { viewModel.launchVirtualApp(it) },
+                        onLaunchRealPackage = { viewModel.launchRealPackageFromVirtualSession(it) },
+                        onCloseVirtualSession = { viewModel.closeVirtualSession() },
+                        onRemoveVirtualApp = { viewModel.removeVirtualApp(it) },
+                    )
+                    OsRoute.CallScreening -> CallScreeningScreen(
+                        state = state,
+                        onBack = { viewModel.navigateBack() },
+                        onRequestCallScreeningRole = onRequestCallScreeningRole,
+                        onToggleFilter = { viewModel.toggleCallFilter() },
+                        onCheckIncomingNumber = { viewModel.screenIncomingNumberCheck(it) },
+                        onResolveUnknown = { num, allow -> viewModel.resolveUnknownCall(num, allow) },
+                        onRemoveRule = { viewModel.removeCallRule(it) },
+                        onContactsPermissionChanged = { viewModel.refreshSystemRolesAndPermissions() },
+                    )
                 }
             }
 
-            // Control Center / Quick Settings Shade (slides down from top)
             AnimatedVisibility(
                 visible = state.isShadeOpen,
                 enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
@@ -240,6 +296,8 @@ private fun MiuiOsRoot(
                     onToggleAutoRotate = { viewModel.toggleAutoRotate() },
                     onToggleReadingMode = { viewModel.toggleReadingMode() },
                     onToggleRam256 = { viewModel.toggleRam256Profile() },
+                    onToggleVirtualRam8Gb = { viewModel.toggleVirtualRam8Gb() },
+                    onToggleBatteryCalmManual = { viewModel.toggleBatteryCalmManual() },
                     onToggleCpuBoost = { viewModel.toggleCpuBoost() },
                     onToggleBgOpt = { viewModel.toggleBgOptimization() },
                     onRunManualOptimization = { viewModel.runManualOptimization() },
@@ -247,7 +305,6 @@ private fun MiuiOsRoot(
                 )
             }
 
-            // MIUI Lock Screen overlay
             AnimatedVisibility(
                 visible = state.isLocked,
                 enter = fadeIn(),
@@ -260,10 +317,14 @@ private fun MiuiOsRoot(
             }
         }
 
-        // Global Reading Mode & Brightness visual overlay
+        val effectiveBrightness = when {
+            state.isBatteryCalmActive -> 0.85f
+            state.preferences.autoBrightness -> 1f
+            else -> state.preferences.brightnessLevel
+        }
         SystemDisplayOverlay(
-            brightnessLevel = if (state.preferences.autoBrightness) 1f else state.preferences.brightnessLevel,
-            readingMode = state.preferences.readingMode,
+            brightnessLevel = effectiveBrightness,
+            readingMode = state.preferences.readingMode || state.isBatteryCalmActive,
         )
     }
 }

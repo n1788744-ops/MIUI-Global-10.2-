@@ -28,12 +28,15 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Android
+import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.PhoneCallback
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SimCard
@@ -281,14 +284,44 @@ fun SettingsScreen(
                             onClick = { onNavigate(OsRoute.DisplaySettings) },
                         )
                     }
-                    if (match("Производительность 256 МБ ОЗУ ЦП 1.5 ГГц")) {
+                    if (match("Производительность 8 ГБ 256 МБ ОЗУ ЦП 1.5 ГГц")) {
                         MiuiSettingsRow(
                             icon = Icons.Filled.Speed,
                             iconBg = MiuiBlue,
-                            title = "ОЗУ 256 МБ и ЦП ≥1.5 ГГц",
+                            title = "ОЗУ 8 ГБ + 256 МБ и ЦП ≥1.5 ГГц",
                             trailingValue = "${String.format("%.2f", state.telemetry.cpuCurrentGhz)} ГГц",
                             testTag = "settings_performance",
                             onClick = { onNavigate(OsRoute.PerformanceSettings) },
+                        )
+                    }
+                    if (match("Режим батареи 80% 70% покой экономия")) {
+                        MiuiSettingsRow(
+                            icon = Icons.Filled.BatterySaver,
+                            iconBg = MiuiEmerald,
+                            title = "Режим покоя и батареи 80% / 70%",
+                            trailingValue = if (state.isBatteryCalmActive) "Активен" else "${state.preferences.batteryCalmThreshold}%",
+                            testTag = "settings_battery_calm",
+                            onClick = { onNavigate(OsRoute.BatteryCalmMode) },
+                        )
+                    }
+                    if (match("Виртуальная среда APK второй аккаунт MAC адрес")) {
+                        MiuiSettingsRow(
+                            icon = Icons.Filled.Android,
+                            iconBg = Color(0xFF4F46E5),
+                            title = "Виртуальная среда (APK / MAC)",
+                            trailingValue = state.activeVirtualAccount?.virtualMac?.takeLast(8) ?: "2-й акк.",
+                            testTag = "settings_virtual_space",
+                            onClick = { onNavigate(OsRoute.VirtualSpace) },
+                        )
+                    }
+                    if (match("Фильтрация звонков контакты неизвестные")) {
+                        MiuiSettingsRow(
+                            icon = Icons.Filled.PhoneCallback,
+                            iconBg = Color(0xFF0284C7),
+                            title = "Фильтрация звонков",
+                            trailingValue = if (state.preferences.callFilterEnabled) "Вкл." else "Откл.",
+                            testTag = "settings_call_screening",
+                            onClick = { onNavigate(OsRoute.CallScreening) },
                         )
                     }
                     if (match("Рабочий стол и доступ по умолчанию")) {
@@ -338,7 +371,7 @@ fun AboutPhoneScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         SpecDetailTile("Версия ОС / Оболочка", "MIUI Global 10.2 (Android ${android.os.Build.VERSION.RELEASE})")
-        SpecDetailTile("Оперативная память ОС", "${state.telemetry.osTargetRamMb} МБ выделено (всего на устройстве: ${state.telemetry.deviceTotalRamMb} МБ)")
+        SpecDetailTile("Оперативная память ОС", "${state.telemetry.osTargetRamMb} МБ базовая + ${state.virtualRam8Gb.virtualRamTotalGb} ГБ отдельная виртуальная ОЗУ")
         SpecDetailTile("Память фоновой оптимизации", "${state.telemetry.bgOptimizationPoolMb} МБ резерв (${state.telemetry.optimizationBufferAllocatedKb} КБ активно)")
         SpecDetailTile("Процессор (ЦП)", "${state.telemetry.cpuCores} ядер · ${String.format("%.2f", state.telemetry.cpuCurrentGhz)} ГГц (мин. порог 1.50 ГГц)")
         SpecDetailTile("Плавность интерфейса", "${state.telemetry.currentFps} FPS · Архитектура ${state.telemetry.cpuArch}")
@@ -351,12 +384,13 @@ fun PerformanceSettingsScreen(
     state: OsUiState,
     onBack: () -> Unit,
     onToggleRam256: () -> Unit,
+    onToggleVirtualRam8Gb: () -> Unit,
     onToggleBgOpt: () -> Unit,
     onToggleCpuBoost: () -> Unit,
     onRunOptimization: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
-    SettingsSubPageScaffold(title = "ОЗУ 256 МБ и ЦП ≥1.5 ГГц", onBack = onBack) {
+    SettingsSubPageScaffold(title = "ОЗУ 8 ГБ + 256 МБ и ЦП ≥1.5 ГГц", onBack = onBack) {
         Surface(
             shape = RoundedCornerShape(20.dp),
             color = MiuiBlue.copy(alpha = 0.08f),
@@ -367,7 +401,7 @@ fun PerformanceSettingsScreen(
                     Icon(Icons.Filled.Memory, contentDescription = null, tint = MiuiBlue)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Профиль 256 МБ ОЗУ + 1.5+ ГГц",
+                        text = "Профиль 8 ГБ + 256 МБ ОЗУ и 1.5+ ГГц",
                         color = TextPrimary,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp,
@@ -375,8 +409,9 @@ fun PerformanceSettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Выделено ${state.telemetry.osTargetRamMb} МБ для оболочки (${state.telemetry.bgOptimizationPoolMb} МБ для фоновой оптимизации). " +
-                        "Текущая частота ЦП: ${String.format("%.2f", state.telemetry.cpuCurrentGhz)} ГГц, плавность: ${state.telemetry.currentFps} FPS.",
+                    text = "Базовая память ОС: ${state.telemetry.osTargetRamMb} МБ (${state.telemetry.bgOptimizationPoolMb} МБ для фоновой оптимизации). " +
+                        "Отдельная виртуальная ОЗУ: ${state.virtualRam8Gb.virtualRamTotalGb} ГБ (${state.virtualRam8Gb.virtualRamTotalMb} МБ, активных страниц: ${state.virtualRam8Gb.committedPagesCount}). " +
+                        "ЦП: ${String.format("%.2f", state.telemetry.cpuCurrentGhz)} ГГц, плавность: ${state.telemetry.currentFps} FPS.",
                     color = TextSecondary,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
@@ -386,6 +421,12 @@ fun PerformanceSettingsScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
+        SettingsSwitchTile(
+            title = "Дополнительная ОЗУ 8 ГБ (отдельная память)",
+            subtitle = "Выделенный пул ${state.virtualRam8Gb.virtualRamTotalMb} МБ для виртуальной среды и многозадачности",
+            checked = state.preferences.virtualRam8GbEnabled,
+            onCheckedChange = { onToggleVirtualRam8Gb() },
+        )
         SettingsSwitchTile(
             title = "Выделение 256 МБ ОЗУ системы",
             subtitle = "Гарантированный объём памяти для стабильной работы рабочего стола",

@@ -2,14 +2,25 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.OsPreferences
 import com.example.data.OsPreferencesRepository
+import com.example.system.CallFilterEventBus
+import com.example.system.CallFilterManager
+import com.example.system.CallScreenActionType
 import com.example.system.InstalledAppInfo
 import com.example.system.InstalledAppsRepository
+import com.example.system.PendingUnknownCallPrompt
+import com.example.system.ScreenedCallRecord
 import com.example.system.SystemTelemetry
 import com.example.system.SystemTelemetryEngine
+import com.example.system.VirtualAccountProfile
+import com.example.system.VirtualAppEntry
+import com.example.system.VirtualRam8GbEngine
+import com.example.system.VirtualRam8GbTelemetry
+import com.example.system.VirtualSpaceManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +28,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
@@ -25,6 +35,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 sealed interface OsRoute {
     data object Home : OsRoute
@@ -36,6 +47,9 @@ sealed interface OsRoute {
     data object LauncherAccess : OsRoute
     data object Calculator : OsRoute
     data object Compass : OsRoute
+    data object VirtualSpace : OsRoute
+    data object CallScreening : OsRoute
+    data object BatteryCalmMode : OsRoute
 }
 
 enum class DesktopFolder(val title: String) {
@@ -53,6 +67,7 @@ data class OsUiState(
     val isPreferencesLoaded: Boolean = false,
     val preferences: OsPreferences = OsPreferences(),
     val telemetry: SystemTelemetry = SystemTelemetry(),
+    val virtualRam8Gb: VirtualRam8GbTelemetry = VirtualRam8GbTelemetry(),
     val installedApps: List<InstalledAppInfo> = emptyList(),
     val clock: ClockSnapshot = ClockSnapshot(),
     val routeStack: List<OsRoute> = listOf(OsRoute.Home),
@@ -65,17 +80,35 @@ data class OsUiState(
     val isInitializingSetup: Boolean = false,
     val setupProgress: Float = 0f,
     val isDefaultHome: Boolean = false,
+    // Virtual environment state
+    val virtualAccounts: List<VirtualAccountProfile> = emptyList(),
+    val activeVirtualAccount: VirtualAccountProfile? = null,
+    val virtualApps: List<VirtualAppEntry> = emptyList(),
+    val activeVirtualSessionApp: VirtualAppEntry? = null,
+    // Call screening state
+    val isCallScreeningRoleHeld: Boolean = false,
+    val hasContactsPermission: Boolean = false,
+    val callHistory: List<ScreenedCallRecord> = emptyList(),
+    val pendingUnknownPrompt: PendingUnknownCallPrompt? = null,
 ) {
     val currentRoute: OsRoute get() = routeStack.lastOrNull() ?: OsRoute.Home
+
+    val isBatteryCalmActive: Boolean
+        get() = preferences.batteryCalmManualOverride ||
+            (preferences.batteryCalmAutoEnabled && telemetry.batteryPercent <= preferences.batteryCalmThreshold)
 }
 
 class OsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val telemetryEngine = SystemTelemetryEngine(application)
+    private val virtualRam8GbEngine = VirtualRam8GbEngine(application)
+    private val virtualSpaceManager = VirtualSpaceManager(application)
+    private val callFilterManager = CallFilterManager(application)
     private val appsRepository = InstalledAppsRepository(application)
     private val prefsRepository = OsPreferencesRepository(application)
 
     private val _telemetry = MutableStateFlow(SystemTelemetry())
+    private val _virtualRam8Gb = MutableStateFlow(VirtualRam8GbTelemetry())
     private val _installedApps = MutableStateFlow<List<InstalledAppInfo>>(emptyList())
     private val _clock = MutableStateFlow(readClockSnapshot())
     private val _routeStack = MutableStateFlow<List<OsRoute>>(listOf(OsRoute.Home))
@@ -90,6 +123,11 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
     private val _isDefaultHome = MutableStateFlow(false)
     private val _isPrefsLoaded = MutableStateFlow(false)
     private val _prefsCache = MutableStateFlow(OsPreferences())
+
+    private val _isCallRoleHeld = MutableStateFlow(false)
+    private val _hasContactsPermission = MutableStateFlow(false)
+    private val _pendingUnknownPrompt = MutableStateFlow<PendingUnknownCallPrompt?>(null)
+    private val _activeVirtualSessionApp = MutableStateFlow<VirtualAppEntry?>(null)
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
@@ -114,6 +152,16 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
         SetupFlags(opt, init, prog, defHome, loaded)
     }
 
+    private val _extraFlags = combine(
+        _virtualRam8Gb,
+        _isCallRoleHeld,
+        _hasContactsPermission,
+        _pendingUnknownPrompt,
+        _activeVirtualSessionApp,
+    ) { vram8, callRole, contactsPerm, unknownPrompt, activeVApp ->
+        ExtraFlags(vram8, callRole, contactsPerm, unknownPrompt, activeVApp)
+    }
+
     val uiState: StateFlow<OsUiState> = combine(
         _prefsCache,
         _telemetry,
@@ -122,6 +170,7 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
         _routeStack,
         _uiFlags,
         _setupFlags,
+        _extraFlags,
     ) { values ->
         val prefs = values[0] as OsPreferences
         val tel = values[1] as SystemTelemetry
@@ -132,11 +181,19 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
         val stack = values[4] as List<OsRoute>
         val flags = values[5] as UiFlags
         val setup = values[6] as SetupFlags
+        val extra = values[7] as ExtraFlags
+
+        val vAccounts = virtualSpaceManager.parseAccounts(prefs.virtualAccountsJson)
+        val activeAccount = vAccounts.firstOrNull { it.id == prefs.activeVirtualAccountId }
+            ?: vAccounts.firstOrNull()
+        val vApps = virtualSpaceManager.parseVirtualApps(prefs.virtualAppsJson)
+        val callHist = callFilterManager.parseHistory(prefs.callHistoryJson)
 
         OsUiState(
             isPreferencesLoaded = setup.isPrefsLoaded,
             preferences = prefs,
             telemetry = tel,
+            virtualRam8Gb = extra.virtualRam8Gb,
             installedApps = apps,
             clock = clk,
             routeStack = stack,
@@ -149,6 +206,14 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
             isInitializingSetup = setup.isInitializingSetup,
             setupProgress = setup.setupProgress,
             isDefaultHome = setup.isDefaultHome,
+            virtualAccounts = vAccounts,
+            activeVirtualAccount = activeAccount,
+            virtualApps = vApps,
+            activeVirtualSessionApp = extra.activeVirtualSessionApp,
+            isCallScreeningRoleHeld = extra.isCallRoleHeld,
+            hasContactsPermission = extra.hasContactsPermission,
+            callHistory = callHist,
+            pendingUnknownPrompt = extra.pendingUnknownPrompt,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -162,29 +227,60 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
             prefsRepository.preferencesFlow.collect { prefs ->
                 _prefsCache.value = prefs
                 _isPrefsLoaded.value = true
+
+                // Ensure at least one Virtual Account with a unique Virtual MAC exists
+                if (prefs.virtualAccountsJson.isBlank()) {
+                    val (defaults, activeId) = virtualSpaceManager.createDefaultAccountIfEmpty("")
+                    prefsRepository.saveVirtualAccounts(
+                        virtualSpaceManager.serializeAccounts(defaults),
+                        activeId,
+                    )
+                }
             }
         }
         viewModelScope.launch {
             _installedApps.value = appsRepository.loadLaunchableApps()
-            _isDefaultHome.value = appsRepository.isDefaultHomeHeld()
+            refreshSystemRolesAndPermissions()
+            _virtualRam8Gb.value = virtualRam8GbEngine.allocateOrVerifyPool(
+                _prefsCache.value.virtualRam8GbEnabled,
+            )
+        }
+        viewModelScope.launch {
+            CallFilterEventBus.pendingUnknown.collect { prompt ->
+                _pendingUnknownPrompt.value = prompt
+            }
         }
         viewModelScope.launch {
             while (isActive) {
                 _clock.value = readClockSnapshot()
                 _telemetry.value = telemetryEngine.collectTelemetry()
-                _isDefaultHome.value = appsRepository.isDefaultHomeHeld()
-                delay(2000L)
+                refreshSystemRolesAndPermissions()
+                val currentPrefs = _prefsCache.value
+                val calmActive = currentPrefs.batteryCalmManualOverride ||
+                    (currentPrefs.batteryCalmAutoEnabled && _telemetry.value.batteryPercent <= currentPrefs.batteryCalmThreshold)
+                // Throttle telemetry polling when 80%/70% Battery Calm Mode is active to reduce drain
+                delay(if (calmActive) 5000L else 2000L)
             }
         }
         // Periodic background optimization loop using dedicated background optimization memory
         viewModelScope.launch {
             while (isActive) {
                 delay(25_000L)
-                if (_prefsCache.value.bgOptimizationEnabled) {
+                val prefs = _prefsCache.value
+                if (prefs.bgOptimizationEnabled) {
                     _telemetry.value = telemetryEngine.runBackgroundOptimizationSweep()
+                    if (prefs.virtualRam8GbEnabled) {
+                        _virtualRam8Gb.value = virtualRam8GbEngine.allocateOrVerifyPool(true)
+                    }
                 }
             }
         }
+    }
+
+    fun refreshSystemRolesAndPermissions() {
+        _isDefaultHome.value = appsRepository.isDefaultHomeHeld()
+        _isCallRoleHeld.value = callFilterManager.isCallScreeningRoleHeld()
+        _hasContactsPermission.value = callFilterManager.hasContactsPermission()
     }
 
     fun updateMeasuredFps(fps: Int) {
@@ -198,8 +294,9 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
             _setupProgress.value = 0.15f
             telemetryEngine.primeOptimizationMemoryPool()
             delay(260L)
-            _setupProgress.value = 0.50f
+            _setupProgress.value = 0.45f
             _installedApps.value = appsRepository.loadLaunchableApps()
+            _virtualRam8Gb.value = virtualRam8GbEngine.allocateOrVerifyPool(true)
             delay(280L)
             _setupProgress.value = 0.85f
             _telemetry.value = telemetryEngine.runBackgroundOptimizationSweep()
@@ -211,10 +308,12 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshDefaultHomeStatus() {
-        _isDefaultHome.value = appsRepository.isDefaultHomeHeld()
+        refreshSystemRolesAndPermissions()
     }
 
     fun createDefaultHomeIntent(): Intent? = appsRepository.createDefaultHomeRoleIntent()
+
+    fun createCallScreeningRoleIntent(): Intent? = callFilterManager.createCallScreeningRoleIntent()
 
     fun openHomeSettings() {
         appsRepository.openHomeLauncherSettings()
@@ -231,6 +330,10 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun navigateBack(): Boolean {
+        if (_activeVirtualSessionApp.value != null) {
+            _activeVirtualSessionApp.value = null
+            return true
+        }
         if (_isLocked.value) return true
         if (_activeFolder.value != null) {
             _activeFolder.value = null
@@ -251,13 +354,6 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             false
         }
-    }
-
-    fun returnHome() {
-        _isShadeOpen.value = false
-        _activeFolder.value = null
-        _isSearchOpen.value = false
-        _routeStack.value = listOf(OsRoute.Home)
     }
 
     fun setShadeOpen(open: Boolean) {
@@ -288,8 +384,13 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
             delay(650L)
             val updated = telemetryEngine.runBackgroundOptimizationSweep()
             _telemetry.value = updated
+            if (_prefsCache.value.virtualRam8GbEnabled) {
+                _virtualRam8Gb.value = virtualRam8GbEngine.expandAndCompactSwapPages()
+            }
             _isOptimizing.value = false
-            _messages.tryEmit("Оптимизировано: освобождено ${updated.lastOptimizationFreedMb} МБ (пул 256 МБ стабилен)")
+            _messages.tryEmit(
+                "Оптимизировано: освобождено ${updated.lastOptimizationFreedMb} МБ (256 МБ ОЗУ + 8 ГБ вирт. пул)",
+            )
         }
     }
 
@@ -346,9 +447,232 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { prefsRepository.toggleCpuBoost() }
     }
 
+    fun toggleVirtualRam8Gb() {
+        viewModelScope.launch {
+            prefsRepository.toggleVirtualRam8Gb()
+            val nextEnabled = !_prefsCache.value.virtualRam8GbEnabled
+            _virtualRam8Gb.value = virtualRam8GbEngine.allocateOrVerifyPool(nextEnabled)
+        }
+    }
+
+    fun toggleBatteryCalmAuto() {
+        viewModelScope.launch { prefsRepository.toggleBatteryCalmAuto() }
+    }
+
+    fun setBatteryCalmThreshold(threshold: Int) {
+        viewModelScope.launch {
+            prefsRepository.setBatteryCalmThreshold(threshold)
+            _messages.tryEmit("Порог режима покоя и экономии: $threshold%")
+        }
+    }
+
+    fun toggleBatteryCalmManual() {
+        viewModelScope.launch { prefsRepository.toggleBatteryCalmManual() }
+    }
+
     fun setCustomWallpaperUri(uri: String?) {
         viewModelScope.launch { prefsRepository.setCustomWallpaperUri(uri) }
     }
+
+    // --- Virtual Environment (Second Account + Virtual MAC + Isolated APK/App) ---
+
+    fun createVirtualAccount(displayName: String, accountHandle: String) {
+        viewModelScope.launch {
+            val newAcc = virtualSpaceManager.createAccount(displayName, accountHandle)
+            val existing = virtualSpaceManager.parseAccounts(_prefsCache.value.virtualAccountsJson)
+            val updated = existing + newAcc
+            prefsRepository.saveVirtualAccounts(
+                virtualSpaceManager.serializeAccounts(updated),
+                newAcc.id,
+            )
+            _messages.tryEmit("Создан второй аккаунт: ${newAcc.displayName} (MAC: ${newAcc.virtualMac})")
+        }
+    }
+
+    fun selectVirtualAccount(accountId: String) {
+        viewModelScope.launch {
+            val accounts = virtualSpaceManager.parseAccounts(_prefsCache.value.virtualAccountsJson)
+            prefsRepository.saveVirtualAccounts(
+                virtualSpaceManager.serializeAccounts(accounts),
+                accountId,
+            )
+        }
+    }
+
+    fun regenerateActiveVirtualMac(customMac: String? = null) {
+        viewModelScope.launch {
+            val accounts = virtualSpaceManager.parseAccounts(_prefsCache.value.virtualAccountsJson)
+            val activeId = _prefsCache.value.activeVirtualAccountId.ifBlank { accounts.firstOrNull()?.id.orEmpty() }
+            val nextMac = if (!customMac.isNullOrBlank() && virtualSpaceManager.isValidMacAddress(customMac)) {
+                customMac.trim().uppercase(Locale.US)
+            } else {
+                virtualSpaceManager.generateLocallyAdministeredMac()
+            }
+            val updated = accounts.map { acc ->
+                if (acc.id == activeId) acc.copy(virtualMac = nextMac) else acc
+            }
+            prefsRepository.saveVirtualAccounts(
+                virtualSpaceManager.serializeAccounts(updated),
+                activeId,
+            )
+            val apps = virtualSpaceManager.parseVirtualApps(_prefsCache.value.virtualAppsJson).map { app ->
+                if (app.accountId == activeId) app.copy(virtualMac = nextMac) else app
+            }
+            prefsRepository.saveVirtualAppsJson(virtualSpaceManager.serializeVirtualApps(apps))
+            _messages.tryEmit("Новый MAC-адрес виртуальной среды: $nextMac")
+        }
+    }
+
+    fun importApkToVirtualSpace(uri: Uri) {
+        viewModelScope.launch {
+            val accounts = virtualSpaceManager.parseAccounts(_prefsCache.value.virtualAccountsJson)
+            val activeAcc = accounts.firstOrNull { it.id == _prefsCache.value.activeVirtualAccountId }
+                ?: accounts.firstOrNull()
+                ?: return@launch
+
+            virtualSpaceManager.importApkFromUri(uri, activeAcc)
+                .onSuccess { entry ->
+                    val existingApps = virtualSpaceManager.parseVirtualApps(_prefsCache.value.virtualAppsJson)
+                    prefsRepository.saveVirtualAppsJson(
+                        virtualSpaceManager.serializeVirtualApps(listOf(entry) + existingApps),
+                    )
+                    _messages.tryEmit("APK «${entry.label}» добавлен в виртуальную среду (${activeAcc.displayName})")
+                }
+                .onFailure {
+                    _messages.tryEmit("Не удалось импортировать APK: ${it.message ?: "ошибка файла"}")
+                }
+        }
+    }
+
+    fun cloneInstalledAppToVirtualSpace(app: InstalledAppInfo) {
+        viewModelScope.launch {
+            val accounts = virtualSpaceManager.parseAccounts(_prefsCache.value.virtualAccountsJson)
+            val activeAcc = accounts.firstOrNull { it.id == _prefsCache.value.activeVirtualAccountId }
+                ?: accounts.firstOrNull()
+                ?: return@launch
+
+            val cloned = virtualSpaceManager.cloneInstalledApp(app, activeAcc)
+            val existingApps = virtualSpaceManager.parseVirtualApps(_prefsCache.value.virtualAppsJson)
+            prefsRepository.saveVirtualAppsJson(
+                virtualSpaceManager.serializeVirtualApps(listOf(cloned) + existingApps),
+            )
+            _messages.tryEmit("«${app.label}» клонировано во второй аккаунт (${activeAcc.virtualMac})")
+        }
+    }
+
+    fun launchVirtualApp(entry: VirtualAppEntry) {
+        viewModelScope.launch {
+            val existingApps = virtualSpaceManager.parseVirtualApps(_prefsCache.value.virtualAppsJson)
+            val updated = existingApps.map {
+                if (it.id == entry.id) it.copy(launchCount = it.launchCount + 1) else it
+            }
+            prefsRepository.saveVirtualAppsJson(virtualSpaceManager.serializeVirtualApps(updated))
+            _activeVirtualSessionApp.value = entry.copy(launchCount = entry.launchCount + 1)
+        }
+    }
+
+    fun launchRealPackageFromVirtualSession(packageName: String) {
+        val target = _installedApps.value.firstOrNull { it.packageName == packageName }
+        if (target != null) {
+            appsRepository.launchApp(target)
+        } else {
+            _messages.tryEmit("APK изолирован внутри виртуального контейнера")
+        }
+    }
+
+    fun closeVirtualSession() {
+        _activeVirtualSessionApp.value = null
+    }
+
+    fun removeVirtualApp(entryId: String) {
+        viewModelScope.launch {
+            val existingApps = virtualSpaceManager.parseVirtualApps(_prefsCache.value.virtualAppsJson)
+            prefsRepository.saveVirtualAppsJson(
+                virtualSpaceManager.serializeVirtualApps(existingApps.filterNot { it.id == entryId }),
+            )
+        }
+    }
+
+    // --- Call Screening (Contacts pass, Unknown sends Allow/Reject prompt) ---
+
+    fun toggleCallFilter() {
+        viewModelScope.launch { prefsRepository.toggleCallFilter() }
+    }
+
+    fun screenIncomingNumberCheck(rawNumber: String) {
+        if (rawNumber.isBlank()) return
+        viewModelScope.launch {
+            val prefs = _prefsCache.value
+            val (decision, contactName) = callFilterManager.evaluateNumber(rawNumber, prefs)
+            val normalized = callFilterManager.normalizePhoneNumber(rawNumber)
+            val record = ScreenedCallRecord(
+                id = UUID.randomUUID().toString(),
+                rawNumber = rawNumber.trim(),
+                normalizedNumber = normalized,
+                contactName = contactName,
+                status = decision,
+                timestampMs = System.currentTimeMillis(),
+            )
+            val existing = callFilterManager.parseHistory(prefs.callHistoryJson)
+            prefsRepository.setCallHistoryJson(
+                callFilterManager.serializeHistory(listOf(record) + existing),
+            )
+
+            when (decision) {
+                CallScreenActionType.ALLOWED_CONTACT -> {
+                    _messages.tryEmit("Контакт «$contactName» — звонок пропущен")
+                }
+                CallScreenActionType.ALLOWED_BY_USER -> {
+                    _messages.tryEmit("Номер $rawNumber в списке разрешённых — пропущен")
+                }
+                CallScreenActionType.REJECTED_BY_USER -> {
+                    _messages.tryEmit("Номер $rawNumber отклонён фильтром")
+                }
+                CallScreenActionType.PENDING_UNKNOWN -> {
+                    callFilterManager.postUnknownCallerNotification(rawNumber.trim(), normalized)
+                    _pendingUnknownPrompt.value = PendingUnknownCallPrompt(
+                        id = record.id,
+                        rawNumber = rawNumber.trim(),
+                        normalizedNumber = normalized,
+                        timestampMs = record.timestampMs,
+                    )
+                }
+            }
+        }
+    }
+
+    fun resolveUnknownCall(normalizedNumber: String, allow: Boolean) {
+        viewModelScope.launch {
+            if (allow) {
+                prefsRepository.allowCallNumber(normalizedNumber)
+            } else {
+                prefsRepository.blockCallNumber(normalizedNumber)
+            }
+            val existing = callFilterManager.parseHistory(_prefsCache.value.callHistoryJson)
+            val updated = existing.map { rec ->
+                if (rec.normalizedNumber == normalizedNumber && rec.status == CallScreenActionType.PENDING_UNKNOWN) {
+                    rec.copy(
+                        status = if (allow) CallScreenActionType.ALLOWED_BY_USER else CallScreenActionType.REJECTED_BY_USER,
+                    )
+                } else {
+                    rec
+                }
+            }
+            prefsRepository.setCallHistoryJson(callFilterManager.serializeHistory(updated))
+            if (_pendingUnknownPrompt.value?.normalizedNumber == normalizedNumber) {
+                _pendingUnknownPrompt.value = null
+            }
+            _messages.tryEmit(
+                if (allow) "Звонок $normalizedNumber разрешён" else "Звонок $normalizedNumber отклонён",
+            )
+        }
+    }
+
+    fun removeCallRule(normalizedNumber: String) {
+        viewModelScope.launch { prefsRepository.removeCallRule(normalizedNumber) }
+    }
+
+    // --- System App Launchers ---
 
     fun launchInstalledApp(app: InstalledAppInfo) {
         _isSearchOpen.value = false
@@ -429,5 +753,13 @@ class OsViewModel(application: Application) : AndroidViewModel(application) {
         val setupProgress: Float,
         val isDefaultHome: Boolean,
         val isPrefsLoaded: Boolean,
+    )
+
+    private data class ExtraFlags(
+        val virtualRam8Gb: VirtualRam8GbTelemetry,
+        val isCallRoleHeld: Boolean,
+        val hasContactsPermission: Boolean,
+        val pendingUnknownPrompt: PendingUnknownCallPrompt?,
+        val activeVirtualSessionApp: VirtualAppEntry?,
     )
 }

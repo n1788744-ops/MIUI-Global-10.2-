@@ -202,6 +202,18 @@ fun SecurityCenterScreen(
             ) {
                 TelemetryMetricCard(
                     icon = Icons.Filled.Memory,
+                    accent = Color(0xFF4F46E5),
+                    title = "Дополнительная ОЗУ: ${state.virtualRam8Gb.virtualRamTotalGb} ГБ (${state.virtualRam8Gb.virtualRamTotalMb} МБ)",
+                    detail = if (state.preferences.virtualRam8GbEnabled) {
+                        "Отдельная виртуальная память активна для виртуальной среды. Активных swap-страниц: ${state.virtualRam8Gb.committedPagesCount} (${String.format("%.1f", state.virtualRam8Gb.committedSwapMb)} МБ кэша, свободно диска: ${state.virtualRam8Gb.storageFreeMb} МБ)."
+                    } else {
+                        "Расширение 8 ГБ отключено в настройках производительности."
+                    },
+                    monoBadge = if (state.preferences.virtualRam8GbEnabled) "8192 МБ ВИРТУАЛЬНАЯ ОЗУ" else "ВЫКЛЮЧЕНО",
+                )
+
+                TelemetryMetricCard(
+                    icon = Icons.Filled.Memory,
                     accent = MiuiBlue,
                     title = "ОЗУ операционной системы: ${state.telemetry.osTargetRamMb} МБ",
                     detail = "Собственный пул приложения: ${state.telemetry.appActivePoolMb} МБ активной оболочки + " +

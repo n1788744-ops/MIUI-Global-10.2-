@@ -29,9 +29,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Explore
@@ -41,6 +43,7 @@ import androidx.compose.material.icons.filled.Mail
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PhoneCallback
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -106,6 +109,7 @@ fun HomeDesktopScreen(
     onLaunchCamera: () -> Unit,
     onToggleFlashlight: () -> Unit,
     onPickWallpaper: (Uri?) -> Unit,
+    onResolveUnknownCall: (String, Boolean) -> Unit,
     onShowToast: (String) -> Unit,
 ) {
     val galleryPicker = rememberLauncherForActivityResult(
@@ -163,14 +167,28 @@ fun HomeDesktopScreen(
                     .testTag("open_control_shade_bar"),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val ramBadge = if (state.preferences.virtualRam8GbEnabled) {
+                        "8 ГБ + ${state.telemetry.osTargetRamMb} МБ"
+                    } else {
+                        "${state.telemetry.osTargetRamMb} МБ"
+                    }
                     Text(
-                        text = "${state.telemetry.osTargetRamMb} МБ · ${String.format("%.1f", state.telemetry.cpuCurrentGhz)} ГГц",
+                        text = "$ramBadge · ${String.format("%.1f", state.telemetry.cpuCurrentGhz)} ГГц",
                         color = Color.White.copy(alpha = 0.92f),
                         fontFamily = JetBrainsMonoFontFamily,
-                        fontSize = 11.sp,
+                        fontSize = 10.5.sp,
                         fontWeight = FontWeight.Medium,
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    if (state.isBatteryCalmActive) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Покой ${state.preferences.batteryCalmThreshold}%",
+                            color = Color(0xFFA7F3D0),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Filled.KeyboardArrowDown,
                         contentDescription = "Открыть шторку управления",
@@ -242,6 +260,61 @@ fun HomeDesktopScreen(
                         tint = MiuiBlue,
                         modifier = Modifier.size(20.dp),
                     )
+                }
+            }
+
+            // Live unknown-caller Allow/Reject prompt banner when CallScreening catches an unknown caller
+            val pendingCall = state.pendingUnknownPrompt
+            if (pendingCall != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color.White.copy(alpha = 0.96f),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Icon(Icons.Filled.PhoneCallback, contentDescription = null, tint = MiuiAmber, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Неизвестный: ${pendingCall.rawNumber}",
+                                color = TextPrimary,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "Разрешить или отклонить?",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        Text(
+                            text = "Разрешить",
+                            color = MiuiEmerald,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onResolveUnknownCall(pendingCall.normalizedNumber, true) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                        )
+                        Text(
+                            text = "Отклонить",
+                            color = Color(0xFFE93E6C),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onResolveUnknownCall(pendingCall.normalizedNumber, false) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                        )
+                    }
                 }
             }
 
@@ -614,6 +687,21 @@ private fun FolderOverlayDialog(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
+                        FolderMiniAction("Вирт. среда", Icons.Filled.Android, Color(0xFF4F46E5)) {
+                            onDismiss(); onNavigate(OsRoute.VirtualSpace)
+                        }
+                        FolderMiniAction("Фильтр звонков", Icons.Filled.PhoneCallback, MiuiBlue) {
+                            onDismiss(); onNavigate(OsRoute.CallScreening)
+                        }
+                        FolderMiniAction("Режим 80/70%", Icons.Filled.BatterySaver, MiuiEmerald) {
+                            onDismiss(); onNavigate(OsRoute.BatteryCalmMode)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
                         FolderMiniAction("Калькулятор", Icons.Filled.Calculate, Color(0xFFF57C00)) {
                             onDismiss(); onNavigate(OsRoute.Calculator)
                         }
@@ -628,12 +716,12 @@ private fun FolderOverlayDialog(
                             onDismiss(); onNavigate(OsRoute.Compass)
                         }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
                     Row(
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        FolderMiniAction("ОЗУ 256 МБ", Icons.Filled.Memory, MiuiEmerald) {
+                        FolderMiniAction("ОЗУ 8 ГБ", Icons.Filled.Memory, MiuiEmerald) {
                             onDismiss(); onNavigate(OsRoute.PerformanceSettings)
                         }
                         FolderMiniAction("ЦП 1.5 ГГц", Icons.Filled.Speed, MiuiBlue) {
@@ -702,9 +790,12 @@ private fun DesktopSearchDialog(
     val systemItems = remember {
         listOf(
             "Настройки MIUI" to OsRoute.Settings,
+            "Виртуальная среда (APK, 2-й аккаунт, MAC)" to OsRoute.VirtualSpace,
+            "Фильтрация звонков (неизвестные / контакты)" to OsRoute.CallScreening,
+            "Режим батареи 80% / 70% (спокойный режим)" to OsRoute.BatteryCalmMode,
+            "Оперативная память 8 ГБ + 256 МБ" to OsRoute.PerformanceSettings,
             "Безопасность и оптимизация ОЗУ" to OsRoute.SecurityCenter,
             "О телефоне (MIUI Global 10.2)" to OsRoute.AboutPhone,
-            "Производительность 256 МБ / 1.5 ГГц" to OsRoute.PerformanceSettings,
             "Экран и яркость" to OsRoute.DisplaySettings,
             "Калькулятор" to OsRoute.Calculator,
         )
